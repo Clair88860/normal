@@ -1,108 +1,67 @@
 import os
-import datetime
-import traceback
-import struct
 import math
 from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.scrollview import ScrollView
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
+from kivy.uix.scrollview import ScrollView
 from kivy.storage.jsonstore import JsonStore
 from kivy.clock import Clock
-from kivy.utils import platform
+from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
+from kivy.utils import platform
 
-# Android BLE/Sensor Imports
-if platform == "android":
-    from jnius import autoclass, PythonJavaClass, java_method
-    BluetoothAdapter = autoclass("android.bluetooth.BluetoothAdapter")
-    BluetoothGattDescriptor = autoclass("android.bluetooth.BluetoothGattDescriptor")
-    UUID = autoclass("java.util.UUID")
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
-    mActivity = PythonActivity.mActivity
+# ---------------- Seite A: Kompass Widget ----------------
+class CompassScreen(BoxLayout):
+    def __init__(self, store: JsonStore, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.store = store
 
-    SensorManager = autoclass("android.hardware.SensorManager")
-    Sensor = autoclass("android.hardware.Sensor")
-    Context = autoclass("android.content.Context")
-else:
-    class PythonJavaClass: pass
-    def java_method(sig): return lambda x: x
+        # Hintergrund
+        with self.canvas.before:
+            Color(0, 0, 0.6, 1)  # Dunkelblau
+            self.bg = Rectangle(size=self.size, pos=self.pos)
+        self.bind(size=self.update_bg, pos=self.update_bg)
 
-CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
+        # Label für Kompass
+        self.label = Label(
+            text="NORD: 0°",
+            font_size="40sp",
+            color=(1, 1, 1, 1),
+            size_hint=(1, 0.5),
+            halign="center",
+            valign="middle"
+        )
+        self.label.bind(size=self.label.setter('text_size'))
+        self.add_widget(self.label)
 
-# ---------------- Richtungsberechnung ----------------
-def angle_to_direction(angle):
-    angle = angle % 360
-    if angle >= 337.5 or angle < 22.5:
-        return "Nord"
-    elif angle < 67.5:
-        return "Nordost"
-    elif angle < 112.5:
-        return "Ost"
-    elif angle < 157.5:
-        return "Südost"
-    elif angle < 202.5:
-        return "Süd"
-    elif angle < 247.5:
-        return "Südwest"
-    elif angle < 292.5:
-        return "West"
-    else:
-        return "Nordwest"
+        # Label nur wenn Arduino = Nein
+        self.arduino_text = None
+        if not (self.store.exists("arduino") and self.store.get("arduino")["value"]):
+            self.arduino_text = Label(
+                text="Hier werden später die Arduino Daten angezeigt.",
+                font_size=24,
+                size_hint=(1, 0.2)
+            )
+            self.add_widget(self.arduino_text)
 
-# ---------------- BLE Callback ----------------
-class BLEScanCallback(PythonJavaClass):
-    __javainterfaces__ = ["android/bluetooth/BluetoothAdapter$LeScanCallback"]
-    def __init__(self, app):
-        super().__init__()
-        self.app = app
-    @java_method("(Landroid/bluetooth/BluetoothDevice;I[B)V")
-    def onLeScan(self, device, rssi, scanRecord):
-        name = device.getName()
-        if name == "Arduino_GCS":
-            self.app.log(f"Gefunden: {name}")
-            self.app.connect(device)
+        # Simulierte Winkelanzeige (später BLE/Arduino ersetzen)
+        self.angle = 0
+        Clock.schedule_interval(self.update_direction, 0.5)
 
-class GattCallback(PythonJavaClass):
-    __javainterfaces__ = ["android/bluetooth/BluetoothGattCallback"]
-    def __init__(self, app):
-        super().__init__()
-        self.app = app
-    @java_method("(Landroid/bluetooth/BluetoothGatt;II)V")
-    def onConnectionStateChange(self, gatt, status, newState):
-        if newState == 2:
-            self.app.log("Verbunden! Suche Services...")
-            Clock.schedule_once(lambda dt: gatt.discoverServices(), 1.0)
-        elif newState == 0:
-            self.app.log("Verbindung getrennt.")
-    @java_method("(Landroid/bluetooth/BluetoothGatt;I)V")
-    def onServicesDiscovered(self, gatt, status):
-        self.app.log("Services entdeckt")
-        services = gatt.getServices()
-        for i in range(services.size()):
-            s = services.get(i)
-            s_uuid = s.getUuid().toString().lower()
-            if "180a" in s_uuid:
-                chars = s.getCharacteristics()
-                for j in range(chars.size()):
-                    c = chars.get(j)
-                    if "2a57" in c.getUuid().toString().lower():
-                        gatt.setCharacteristicNotification(c, True)
-                        d = c.getDescriptor(UUID.fromString(CCCD_UUID))
-                        if d:
-                            d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                            gatt.writeDescriptor(d)
-    @java_method("(Landroid/bluetooth/BluetoothGatt;Landroid/bluetooth/BluetoothGattCharacteristic;)V")
-    def onCharacteristicChanged(self, gatt, characteristic):
-        data = characteristic.getValue()
-        if data:
-            try:
-                angle = struct.unpack('<h', bytes(data))[0]
-                self.app.update_ble_direction(angle)
-            except Exception as e:
-                self.app.log(f"Fehler: {str(e)}")
+    def update_bg(self, *args):
+        self.bg.size = self.size
+        self.bg.pos = self.pos
+
+    def update_direction(self, dt):
+        # 🔁 Simulation: Winkel erhöhen
+        self.angle = (self.angle + 10) % 360
+        dirs = ["N", "NO", "O", "SO", "S", "SW", "W", "NW"]
+        direction = dirs[int((self.angle + 22.5) / 45) % 8]
+        self.label.text = f"NORD: {self.angle}°\n{direction}"
+
 
 # ---------------- Dashboard ----------------
 class Dashboard(FloatLayout):
@@ -113,137 +72,62 @@ class Dashboard(FloatLayout):
         self.build_topbar()
         Clock.schedule_once(lambda dt: self.show_a(), 0.1)
 
-    # ---------------- Topbar ----------------
     def build_topbar(self):
         self.topbar = BoxLayout(size_hint=(1, .08), pos_hint={"top": 1}, spacing=5, padding=5)
         for t, f in [("A", self.show_a), ("H", self.show_help), ("E", self.show_settings)]:
-            b = Button(text=t, background_color=(0.15,0.15,0.15,1), color=(1,1,1,1))
+            b = Button(text=t, background_color=(0.15, 0.15, 0.15, 1), color=(1, 1, 1, 1))
             b.bind(on_press=f)
             self.topbar.add_widget(b)
         self.add_widget(self.topbar)
 
-    # ---------------- Seite A ----------------
     def show_a(self, *args):
         self.clear_widgets()
         self.add_widget(self.topbar)
+        compass = CompassScreen(store=self.store, size_hint=(1, 1))
+        self.add_widget(compass)
 
-        arduino_on = self.store.get("arduino")["value"] if self.store.exists("arduino") else False
+    def show_help(self, *args):
+        self.clear_widgets()
+        self.add_widget(self.topbar)
+        lbl = Label(text="Bei Fragen oder Problemen:\nE-Mail Support", font_size=20, pos_hint={"center_x": .5, "center_y": .5})
+        self.add_widget(lbl)
 
-        # Layout
-        layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
+    def show_settings(self, *args):
+        self.clear_widgets()
+        self.add_widget(self.topbar)
+        layout = BoxLayout(orientation="vertical", padding=[20,120,20,20], spacing=20)
+        layout.add_widget(Label(text="Einstellungen", font_size=32, size_hint_y=None, height=dp(60)))
 
-        # Nur Text anzeigen, wenn Arduino nicht aktiviert ist
-        if not arduino_on:
-            lbl = Label(text="Hier werden später die Arduino Daten angezeigt.", font_size=24)
-            layout.add_widget(lbl)
+        def create_toggle_row(text, key):
+            row = BoxLayout(size_hint_y=None, height=dp(60))
+            label = Label(text=text)
+            btn_ja = Button(text="Ja", size_hint=(None,None), size=(dp(80), dp(45)))
+            btn_nein = Button(text="Nein", size_hint=(None,None), size=(dp(80), dp(45)))
+            value = self.store.get(key)["value"] if self.store.exists(key) else False
+            def update(selected):
+                if selected:
+                    btn_ja.background_color = (0, 0.6, 0, 1)
+                    btn_nein.background_color = (1,1,1,1)
+                else:
+                    btn_nein.background_color = (0,0.6,0,1)
+                    btn_ja.background_color = (1,1,1,1)
+            update(value)
+            btn_ja.bind(on_press=lambda x: [self.store.put(key, value=True), update(True)])
+            btn_nein.bind(on_press=lambda x: [self.store.put(key, value=False), update(False)])
+            row.add_widget(label)
+            row.add_widget(btn_ja)
+            row.add_widget(btn_nein)
+            return row
 
-        # BLE-Kompass Anzeigen
-        self.direction_lbl = Label(text="Richtung: Nord", font_size=50, size_hint_y=0.4)
-        self.angle_lbl = Label(text="0°", font_size=40, size_hint_y=0.2)
-        layout.add_widget(self.direction_lbl)
-        layout.add_widget(self.angle_lbl)
-
-        # Scan Button
-        self.status_btn = Button(text="Scan starten", size_hint_y=0.2, on_press=self.start_scan)
-        layout.add_widget(self.status_btn)
-
-        # Log
-        self.scroll = ScrollView(size_hint_y=0.2)
-        self.log_lbl = Label(text="Bereit\n", size_hint_y=None, halign="left", valign="top")
-        self.log_lbl.bind(texture_size=self.log_lbl.setter('size'))
-        self.scroll.add_widget(self.log_lbl)
-        layout.add_widget(self.scroll)
-
+        layout.add_widget(create_toggle_row("Mit Arduino Daten", "arduino"))
         self.add_widget(layout)
 
-        # BLE Variablen
-        self.gatt = None
-        self.scan_cb = None
-        self.gatt_cb = None
-        self.ble_angle = None
-
-        # Fallback Kompass
-        if platform == "android":
-            Clock.schedule_interval(self.update_fallback_direction, 1.0)
-            self.sensor_manager = mActivity.getSystemService(Context.SENSOR_SERVICE)
-            self.rotation_sensor = self.sensor_manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-            self.orientation = 0.0
-            self.sensor_listener = self.create_sensor_listener()
-            self.sensor_manager.registerListener(
-                self.sensor_listener,
-                self.rotation_sensor,
-                SensorManager.SENSOR_DELAY_UI
-            )
-
-    # ---------------- BLE Funktionen ----------------
-    def log(self, txt):
-        Clock.schedule_once(lambda dt: setattr(self.log_lbl, 'text', self.log_lbl.text + txt + "\n"))
-
-    def start_scan(self, *args):
-        try:
-            adapter = BluetoothAdapter.getDefaultAdapter()
-            if not adapter or not adapter.isEnabled():
-                self.log("Bitte Bluetooth aktivieren!")
-                return
-            self.log("Scanne...")
-            self.status_btn.text = "Suche..."
-            self.scan_cb = BLEScanCallback(self)
-            adapter.startLeScan(self.scan_cb)
-        except Exception as e:
-            self.log(f"Scan Fehler: {str(e)}")
-
-    def connect(self, device):
-        adapter = BluetoothAdapter.getDefaultAdapter()
-        adapter.stopLeScan(self.scan_cb)
-        self.log(f"Verbinde mit {device.getAddress()}...")
-        self.gatt_cb = GattCallback(self)
-        self.gatt = device.connectGatt(mActivity, False, self.gatt_cb, 2)
-
-    def update_ble_direction(self, angle):
-        dir_str = angle_to_direction(angle)
-        Clock.schedule_once(lambda dt: setattr(self.direction_lbl, 'text', f"Richtung: {dir_str}"))
-        Clock.schedule_once(lambda dt: setattr(self.angle_lbl, 'text', f"{angle}°"))
-        self.ble_angle = angle
-
-    # ---------------- Fallback Kompass ----------------
-    def create_sensor_listener(self):
-        class Listener(PythonJavaClass):
-            __javainterfaces__ = ["android/hardware/SensorEventListener"]
-            def __init__(self, app):
-                super().__init__()
-                self.app = app
-            @java_method("(Landroid/hardware/SensorEvent;)V")
-            def onSensorChanged(self, event):
-                rotation = event.values
-                if len(rotation) >= 3:
-                    R = [0]*9
-                    SensorManager.getRotationMatrixFromVector(R, rotation)
-                    orientation = SensorManager.getOrientation(R, [0.0, 0.0, 0.0])
-                    azimut = math.degrees(orientation[0])
-                    if azimut < 0:
-                        azimut += 360
-                    self.app.orientation = azimut
-            @java_method("(Landroid/hardware/Sensor;I)V")
-            def onAccuracyChanged(self, sensor, accuracy):
-                pass
-        return Listener(self)
-
-    def update_fallback_direction(self, dt):
-        if self.ble_angle is None:
-            dir_str = angle_to_direction(self.orientation)
-            self.direction_lbl.text = f"Richtung: {dir_str}"
-            self.angle_lbl.text = f"{int(self.orientation)}°"
-
-    def on_stop(self):
-        if hasattr(self, 'gatt') and self.gatt:
-            self.gatt.close()
-        if platform == "android" and hasattr(self, 'sensor_manager'):
-            self.sensor_manager.unregisterListener(self.sensor_listener)
 
 # ---------------- Main App ----------------
 class MainApp(App):
     def build(self):
         return Dashboard()
+
 
 if __name__ == "__main__":
     MainApp().run()
