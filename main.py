@@ -1,133 +1,58 @@
 import os
-import math
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
+from kivy.uix.camera import Camera
 from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
-from kivy.storage.jsonstore import JsonStore
-from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle
+from kivy.graphics import Color, Ellipse
 from kivy.metrics import dp
 from kivy.utils import platform
 
-# ---------------- Seite A: Kompass Widget ----------------
-class CompassScreen(BoxLayout):
-    def __init__(self, store: JsonStore, **kwargs):
-        super().__init__(**kwargs)
-        self.orientation = "vertical"
-        self.store = store
-
-        # Hintergrund
-        with self.canvas.before:
-            Color(0, 0, 0.6, 1)  # Dunkelblau
-            self.bg = Rectangle(size=self.size, pos=self.pos)
-        self.bind(size=self.update_bg, pos=self.update_bg)
-
-        # Label für Kompass
-        self.label = Label(
-            text="NORD: 0°",
-            font_size="40sp",
-            color=(1, 1, 1, 1),
-            size_hint=(1, 0.5),
-            halign="center",
-            valign="middle"
-        )
-        self.label.bind(size=self.label.setter('text_size'))
-        self.add_widget(self.label)
-
-        # Label nur wenn Arduino = Nein
-        self.arduino_text = None
-        if not (self.store.exists("arduino") and self.store.get("arduino")["value"]):
-            self.arduino_text = Label(
-                text="Hier werden später die Arduino Daten angezeigt.",
-                font_size=24,
-                size_hint=(1, 0.2)
-            )
-            self.add_widget(self.arduino_text)
-
-        # Simulierte Winkelanzeige (später BLE/Arduino ersetzen)
-        self.angle = 0
-        Clock.schedule_interval(self.update_direction, 0.5)
-
-    def update_bg(self, *args):
-        self.bg.size = self.size
-        self.bg.pos = self.pos
-
-    def update_direction(self, dt):
-        # 🔁 Simulation: Winkel erhöhen
-        self.angle = (self.angle + 10) % 360
-        dirs = ["N", "NO", "O", "SO", "S", "SW", "W", "NW"]
-        direction = dirs[int((self.angle + 22.5) / 45) % 8]
-        self.label.text = f"NORD: {self.angle}°\n{direction}"
-
-
-# ---------------- Dashboard ----------------
-class Dashboard(FloatLayout):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.store = JsonStore("settings.json")
-
-        self.build_topbar()
-        Clock.schedule_once(lambda dt: self.show_a(), 0.1)
-
-    def build_topbar(self):
-        self.topbar = BoxLayout(size_hint=(1, .08), pos_hint={"top": 1}, spacing=5, padding=5)
-        for t, f in [("A", self.show_a), ("H", self.show_help), ("E", self.show_settings)]:
-            b = Button(text=t, background_color=(0.15, 0.15, 0.15, 1), color=(1, 1, 1, 1))
-            b.bind(on_press=f)
-            self.topbar.add_widget(b)
-        self.add_widget(self.topbar)
-
-    def show_a(self, *args):
-        self.clear_widgets()
-        self.add_widget(self.topbar)
-        compass = CompassScreen(store=self.store, size_hint=(1, 1))
-        self.add_widget(compass)
-
-    def show_help(self, *args):
-        self.clear_widgets()
-        self.add_widget(self.topbar)
-        lbl = Label(text="Bei Fragen oder Problemen:\nE-Mail Support", font_size=20, pos_hint={"center_x": .5, "center_y": .5})
-        self.add_widget(lbl)
-
-    def show_settings(self, *args):
-        self.clear_widgets()
-        self.add_widget(self.topbar)
-        layout = BoxLayout(orientation="vertical", padding=[20,120,20,20], spacing=20)
-        layout.add_widget(Label(text="Einstellungen", font_size=32, size_hint_y=None, height=dp(60)))
-
-        def create_toggle_row(text, key):
-            row = BoxLayout(size_hint_y=None, height=dp(60))
-            label = Label(text=text)
-            btn_ja = Button(text="Ja", size_hint=(None,None), size=(dp(80), dp(45)))
-            btn_nein = Button(text="Nein", size_hint=(None,None), size=(dp(80), dp(45)))
-            value = self.store.get(key)["value"] if self.store.exists(key) else False
-            def update(selected):
-                if selected:
-                    btn_ja.background_color = (0, 0.6, 0, 1)
-                    btn_nein.background_color = (1,1,1,1)
-                else:
-                    btn_nein.background_color = (0,0.6,0,1)
-                    btn_ja.background_color = (1,1,1,1)
-            update(value)
-            btn_ja.bind(on_press=lambda x: [self.store.put(key, value=True), update(True)])
-            btn_nein.bind(on_press=lambda x: [self.store.put(key, value=False), update(False)])
-            row.add_widget(label)
-            row.add_widget(btn_ja)
-            row.add_widget(btn_nein)
-            return row
-
-        layout.add_widget(create_toggle_row("Mit Arduino Daten", "arduino"))
-        self.add_widget(layout)
-
-
-# ---------------- Main App ----------------
-class MainApp(App):
+class CameraApp(App):
     def build(self):
-        return Dashboard()
+        self.root_layout = FloatLayout()
 
+        # ---------------- Kamera ----------------
+        self.camera = Camera(play=True, resolution=(1280, 720))
+        self.camera.size_hint = (1, 1)
+        self.camera.pos_hint = {"x": 0, "y": 0}
+        self.root_layout.add_widget(self.camera)
+
+        # ---------------- Aufnahme Button ----------------
+        self.capture_btn = Button(
+            size_hint=(None, None),
+            size=(dp(80), dp(80)),
+            pos_hint={"center_x": 0.5, "y": 0.05},
+            background_color=(0,0,0,0)  # transparent, nur Grafik
+        )
+        self.capture_btn.bind(on_press=self.take_photo)
+
+        # Runder Button zeichnen
+        with self.capture_btn.canvas.before:
+            Color(1, 1, 1, 1)  # Weiß
+            self.circle = Ellipse(pos=self.capture_btn.pos, size=self.capture_btn.size)
+
+        # Aktualisiere Kreis bei Position/Größe
+        self.capture_btn.bind(pos=self.update_circle, size=self.update_circle)
+
+        self.root_layout.add_widget(self.capture_btn)
+
+        # Speicherort für Fotos
+        self.photos_dir = os.path.join(self.user_data_dir, "photos")
+        os.makedirs(self.photos_dir, exist_ok=True)
+
+        return self.root_layout
+
+    def update_circle(self, *args):
+        self.circle.pos = self.capture_btn.pos
+        self.circle.size = self.capture_btn.size
+
+    def take_photo(self, instance):
+        # Dateiname automatisch nummeriert
+        files = sorted([f for f in os.listdir(self.photos_dir) if f.endswith(".png")])
+        next_num = len(files) + 1
+        path = os.path.join(self.photos_dir, f"{next_num:04d}.png")
+        self.camera.export_to_png(path)
+        print(f"Foto gespeichert: {path}")
 
 if __name__ == "__main__":
-    MainApp().run()
+    CameraApp().run()
